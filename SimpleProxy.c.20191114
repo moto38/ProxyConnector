@@ -39,6 +39,7 @@
 
 #define MAXCONNECTION 256
 
+#define USE_SELECT
 
 #define ParentProxyHost "localhost"
 #define ParentProxyPort "8080"
@@ -105,6 +106,30 @@ int main(void){
   
   while(1){
 
+#ifdef USE_SELECT
+    /*
+    FD_ZERO(&fdRead);
+    FD_SET(ListenSocket, &fdRead);
+
+    for(int i=0;i<MAXCONNECTION;i++){
+      if( sockmng[i].csocket != INVALID_SOCKET )
+	FD_SET(sockmng[i].csocket , &fdRead );
+    }
+
+    nResult = select(0, &fdRead, NULL, NULL, &timeout);
+
+    printf("nResult=%d\n",nResult);
+    /*
+    if( nResult == SOCKET_ERROR ){
+      printf("select failed: %d\n", WSAGetLastError());
+      closesocket(ListenSocket);
+      WSACleanup();
+      return 1;
+    }else if( nResult == 0 ){
+      printf("continue..\n");
+      continue;
+    } // else ...
+    */
     
     AddrLen = sizeof(SOCKADDR_STORAGE);
     ClientSocket = accept(ListenSocket, (LPSOCKADDR)&sockAddr, &AddrLen);
@@ -148,7 +173,45 @@ int main(void){
   for(int i=0; i<MAXCONNECTION; i++){   
     CloseHandle(sockmng[i].hThread);
   }
+    
+#else  // not USE_SELECT
+  // Accept a client socket
+  ClientSocket = accept(ListenSocket, NULL, NULL);
+  if (ClientSocket == INVALID_SOCKET) {
+    printf("accept failed: %d\n", WSAGetLastError());
+    closesocket(ListenSocket);
+    WSACleanup();
+    return 1;
+  }
   
+  iResult = -1;
+  for(int i=0; i<MAXCONNECTION; i++){
+    if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread し、iResult=i。ループが最後までいった場合は「thread生成に失敗した」ということでiResult=-1のまま */
+#ifdef DEBUG
+      printf("sockid:%d\n",i);
+#endif //DEBUG      
+      sockmng[i].status = THREADRUNNING;
+      sockmng[i].csocket = ClientSocket ;
+      sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ひきすうは自IDなど含んだ構造体にする事。終了ステータスを返すため */
+      iResult = i;
+      break;
+    }
+  }
+  
+  if( iResult == -1 ){
+    printf("can not make Thread");
+    CloseHandle(sockmng[iResult].hThread);
+    closesocket(sockmng[iResult].csocket);
+    
+    sockmng[iResult].status = THREADREADY;
+    sockmng[iResult].hThread = NULL ;
+    sockmng[iResult].csocket = INVALID_SOCKET ;
+    /* return iResult;  /* 作れなかった、と記録するだけで動きつづけるため、main() では return しない */
+  }
+  
+
+#endif //USE_SELECT
+
   WSACleanup();
   return 0;
   

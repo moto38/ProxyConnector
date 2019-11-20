@@ -30,15 +30,15 @@
 
 //#define DEFAULT_PORT "1100"
 #define DEFAULT_PORT "4000"
-//#define DEFAULT_PORT "18080"
 #define DEFAULT_BUFLEN 4096
 
 #define THREADREADY 0
 #define THREADRUNNING 1
 #define THREADSTOP 2
 
-#define MAXCONNECTION 256
+#define MAXCONNECTION 16
 
+#define USE_SELECT
 
 #define ParentProxyHost "localhost"
 #define ParentProxyPort "8080"
@@ -105,6 +105,30 @@ int main(void){
   
   while(1){
 
+#ifdef USE_SELECT
+    
+    FD_ZERO(&fdRead);
+    FD_SET(ListenSocket, &fdRead);
+
+    for(int i=0;i<MAXCONNECTION;i++){
+      if( sockmng[i].csocket != INVALID_SOCKET )
+	FD_SET(sockmng[i].csocket , &fdRead );
+    }
+
+    nResult = select(0, &fdRead, NULL, NULL, &timeout);
+
+    printf("nResult=%d\n",nResult);
+    /*
+    if( nResult == SOCKET_ERROR ){
+      printf("select failed: %d\n", WSAGetLastError());
+      closesocket(ListenSocket);
+      WSACleanup();
+      return 1;
+    }else if( nResult == 0 ){
+      printf("continue..\n");
+      continue;
+    } // else ...
+    */
     
     AddrLen = sizeof(SOCKADDR_STORAGE);
     ClientSocket = accept(ListenSocket, (LPSOCKADDR)&sockAddr, &AddrLen);
@@ -119,11 +143,8 @@ int main(void){
       
     iResult = -1;
     for(int i=0; i<MAXCONNECTION; i++){
-      if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread し、iResult=i。ループが最後までいった場合は「thread生成に失敗した」ということでiResult=-1のまま */
-
-#ifdef DEBUG	
+      if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread する。みつからないなら失敗した となって作らない */
 	printf("sockid:%d\n",i);
-#endif //DEBUG       
 	sockmng[i].status = THREADRUNNING;
 	sockmng[i].csocket = ClientSocket ;
 	sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ひきすうは自IDなど含んだ構造体にする事。終了ステータスを返すため */
@@ -134,7 +155,6 @@ int main(void){
     
     if( iResult == -1 ){
       printf("can not make Thread: %d\n",WSAGetLastError());
-      /*
       CloseHandle(sockmng[iResult].hThread);
       closesocket(sockmng[iResult].csocket);
       
@@ -148,7 +168,43 @@ int main(void){
   for(int i=0; i<MAXCONNECTION; i++){   
     CloseHandle(sockmng[i].hThread);
   }
+    
+#else  // not USE_SELECT
+  // Accept a client socket
+  ClientSocket = accept(ListenSocket, NULL, NULL);
+  if (ClientSocket == INVALID_SOCKET) {
+    printf("accept failed: %d\n", WSAGetLastError());
+    closesocket(ListenSocket);
+    WSACleanup();
+    return 1;
+  }
   
+  iResult = -1;
+  for(int i=0; i<MAXCONNECTION; i++){
+    if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread する。みつからないなら失敗した となって作らない */
+      printf("sockid:%d\n",i);
+      sockmng[i].status = THREADRUNNING;
+      sockmng[i].csocket = ClientSocket ;
+      sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ひきすうは自IDなど含んだ構造体にする事。終了ステータスを返すため */
+      iResult = i;
+      break;
+    }
+  }
+  
+  if( iResult == -1 ){
+    printf("can not make Thread");
+    CloseHandle(sockmng[iResult].hThread);
+    closesocket(sockmng[iResult].csocket);
+    
+    sockmng[iResult].status = THREADREADY;
+    sockmng[iResult].hThread = NULL ;
+    sockmng[iResult].csocket = INVALID_SOCKET ;
+    /* return iResult;  /* 作れなかった、と記録するだけで動きつづけるため、main() では return しない */
+  }
+  
+
+#endif
+
   WSACleanup();
   return 0;
   
@@ -164,25 +220,12 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修正
   char recvbuf[DEFAULT_BUFLEN];
   int iSendResult , iResult ;
   int recvbuflen = DEFAULT_BUFLEN;
-  
+
   int sockid = ((sockMng *)sockmng)->sockid; 
   SOCKET ClientSocket = ((sockMng *)sockmng)->csocket; /* sockmng を sockMng * にCASTして、そのcsocketを取り出し ClientSocket へ入れる */
   SOCKET ConnectSocket ;
-  
 
-  fd_set fdReadAtRcvThread;
-  struct timeval timeoutAtRcvThread;
-  int nResultAtRcvThread;
-
-  timeoutAtRcvThread.tv_sec = 50;
-  timeoutAtRcvThread.tv_usec = 500*1000 ;
-  
-
-
-
-  DWORD dwNonBlocking = 1;
-
-    /* proxyへのソケットを生成する */
+  /* proxyへのソケットを生成する */
   ConnectSocket = makeConnectSocket(ParentProxyHost , ParentProxyPort);
   if( ConnectSocket == INVALID_SOCKET ){
     /* 生成に失敗したらこのスレッドは消える */
@@ -193,143 +236,75 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修正
     ExitThread(TRUE);
   }
 
-  //ioctlsocket(ClientSocket, FIONBIO, &dwNonBlocking);
-  //ioctlsocket(ConnectSocket, FIONBIO, &dwNonBlocking);
-  
   /* ループ */
   do {
-    /* 
-       ClientRecv
-         1:reslut==0 -> connection close
-         2:result< 0 -> recv failed / connection close
-         3:result> 0 -> success
-           ConnectSend
-             4:result==SCOKET_ERROR -> connection close
-    */
 
-    FD_ZERO(&fdReadAtRcvThread);
-    FD_SET(ClientSocket,  &fdReadAtRcvThread);
-    FD_SET(ConnectSocket, &fdReadAtRcvThread);
+    /* Client から受信 */
+    iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
+    
+    if (iResult == 0){
+      printf("sockid:%d/Connection closing...\n",sockid);
+      int iiResult = shutdown(ClientSocket, SD_BOTH);
+      if (iiResult == SOCKET_ERROR) {
+	printf("sockid:%d/shutdown failed: %d\n", sockid, WSAGetLastError());
+	closesocket(ClientSocket);
+	closesocket(ConnectSocket);
+	break ;
+      }else if (iResult > 0) {
+#ifdef DEBUG
+	printf("sockid:%d/Bytes received: %d\n", sockid, iResult);
+#endif // DEBUG
 
-    nResultAtRcvThread = select(0, &fdReadAtRcvThread, NULL, NULL, &timeoutAtRcvThread);
-    printf("nResultAtrcvthread=%d\n",nResultAtRcvThread);
+      /*
+      // Echo the buffer back to the sender
+      iSendResult = send(ClientSocket, recvbuf, iResult, 0);
+      if (iSendResult == SOCKET_ERROR) {
+	printf("sockid:%d/send failed: %d\n", sockid, WSAGetLastError());
+	closesocket(ClientSocket);
+	closesocket(ConnectSocket);
+	return 1; // スレッドのエラーの戻り値は 1 でいいのか?
+      }
+      printf("sockid:%d/Bytes sent: %d\n", sockid, iSendResult);
+      */
 
-    /*if (nResultAtRcvThread == SOCKET_ERROR) {
-      printf("selectの実行に失敗しました。\n");
+      iSendResult = send(ConnectSocket , recvbuf , iResult, 0);
+      if (iSendResult == SOCKET_ERROR) {
+	printf("sockid:%d/send failed: %d\n", sockid, WSAGetLastError());
+	closesocket(ClientSocket);
+	closesocket(ConnectSocket);
+	return 1; // スレッドのエラーの戻り値は 1 でいいのか?
+      }
+
+#ifdef DEBUG      
+      printf("sockid:%d/Bytes sent(to ParentServer): %d\n", sockid, iSendResult);
+#endif //DEBUG
+
+      
+    } else if (iResult == 0){
+      printf("sockid:%d/Connection closing...\n",sockid);
+      int iiResult = shutdown(ClientSocket, SD_BOTH);
+      if (iiResult == SOCKET_ERROR) {
+	printf("sockid:%d/shutdown failed: %d\n", sockid, WSAGetLastError());
+	closesocket(ClientSocket);
+	closesocket(ConnectSocket);
+	break ;
+      }
+
+      // cleanup
+      printf("sockid:%d/Close socket\n",sockid);
+      closesocket(ConnectSocket);
+      closesocket(ClientSocket);
+
+    }else {
+      /* Client からの受信で失敗 */
+      printf("sockid:%d/recv failed: %d\n", sockid, WSAGetLastError());
       closesocket(ClientSocket);
       closesocket(ConnectSocket);
-      break;
-      } else*/
-    if (nResultAtRcvThread == 0)
-      continue;
-    else
-      if (FD_ISSET(ClientSocket, &fdReadAtRcvThread)){
-	/* Client から受信 */
-	iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
-	
-	if (iResult == 0){
-	  /* 1: Clientからのコネクションがクローズしちゃった→セッション終了 */
-	  printf("sockid:%d/Connection closing...\n",sockid);
-	  int iiResult = shutdown(ClientSocket, SD_BOTH);
-	  if (iiResult == SOCKET_ERROR) {
-	    printf("sockid:%d/shutdown failed: %d\n", sockid, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break ;
-	  }
-	  // cleanup
-	  printf("sockid:%d/Close socket\n",sockid);
-	  closesocket(ConnectSocket);
-	  closesocket(ClientSocket);
-	  
-	}else if (iResult < 0) {
-	  if( iResult == -1){
-	    /* スルー */
-	    ;
-	  }else{
-	    /* 2: Client からの受信で失敗 → コネクションが異常とみなしセッション終了 */
-	    printf("sockid:%d/recv's return:%d/recv failed: %d\n", sockid, iResult, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break;
-	  }
-	}else if(iResult > 0) {
-	  
-#ifdef DEBUG
-	  printf("sockid:%d/Bytes received: %d\n", sockid, iResult);
-	  printf("sockid:%d/RCV_fromClient:%\n",sockid,recvbuf);
-#endif // DEBUG
-	  
-	  /* 3: Client からの受信データがあった→Connectサーバに送信する */
-	  iSendResult = send(ConnectSocket , recvbuf , iResult, 0);
-	  
-#ifdef DEBUG      
-	  printf("sockid:%d/Bytes sent(to ParentServer): %d\n", sockid, iSendResult);
-	  printf("sockid:%d/SEND_toConSrv:%s\n",sockid,recvbuf);
-#endif //DEBUG
-	  
-	  if (iSendResult == SOCKET_ERROR) {
-	    /* 4: Connectサーバへの送信に失敗した→セッション終了 */
-	    printf("sockid:%d/send failed: %d\n", sockid, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break;
-	  }
-	}
-      }// if FD_ISSET(ClientSocket, ,,,)
-      else if (FD_ISSET(ConnectSocket, &fdReadAtRcvThread)){
-      
-	/* ConnectServer から受信 */
-	iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0);
-	
-	if (iResult == 0){
-	  /* 1: ConnectServerからのコネクションがクローズしちゃった→セッション終了 */
-	  printf("sockid:%d/Connect Server's Connection closing...\n",sockid);
-	  int iiResult = shutdown(ClientSocket, SD_BOTH);
-	  if (iiResult == SOCKET_ERROR) {
-	    printf("sockid:%d/shutdown failed: %d\n", sockid, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break ;
-	  }
-	  // cleanup
-	  printf("sockid:%d/Close socket\n",sockid);
-	  closesocket(ConnectSocket);
-	  closesocket(ClientSocket);
-	    
-	  //}else if (iResult < 0) {
-	  /* 2: ConnectServer からの受信で失敗 → コネクションが異常とみなしセッション終了 */
-	  /*printf("sockid:%d/Connect Server's data recv failed: %d\n", sockid, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break;*/
-	    
-	} else if(iResult > 0) {
-	    
-#ifdef DEBUG
-	  printf("sockid:%d/Bytes received: %d\n", sockid, iResult);
-	  printf("sockid:%d/RCV_fromConSvr:%s\n",sockid,recvbuf);
-#endif // DEBUG
-	    
-	  /* 3: ConnectServer からの受信データがあった→Clientに送信する */
-	  iSendResult = send(ClientSocket , recvbuf , iResult, 0);
-	    
-#ifdef DEBUG      
-	  printf("sockid:%d/Bytes sent(to Client): %d\n", sockid, iSendResult);
-	  printf("sockid:%d/SEND_toClient:%s\n",sockid,recvbuf);
-#endif //DEBUG
-	    
-	  if (iSendResult == SOCKET_ERROR) {
-	    /* 4: Clientへの送信に失敗した→セッション終了 */
-	    printf("sockid:%d/failed to send to Client: %d\n", sockid, WSAGetLastError());
-	    closesocket(ClientSocket);
-	    closesocket(ConnectSocket);
-	    break;
-	  }
-	}
-      } // if( FD_ISSET(ConnectSocket, ,,,)
-  }while (iResult > 0);
+      break; // return 1 -> break スレッドのエラーの戻り値は 1 でいいのか? エラーでクローズでリターンでいいと思われる
+     }
     
+  } while (iResult > 0);
+
   ((sockMng *)sockmng)->status = THREADSTOP ;
   
   ExitThread(TRUE);
@@ -363,6 +338,7 @@ SOCKET makeListenSocket(LPSTR localportnum){
     WSACleanup();
     return INVALID_SOCKET ;
   }
+  
   
   // Create a SOCKET for the server to listen for client connections
   retSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
