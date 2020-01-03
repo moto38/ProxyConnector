@@ -42,7 +42,7 @@
 #define USE_SELECT
 
 #define ParentProxyHost "localhost"
-#define ParentProxyPort "8080"  //"4096" //
+#define ParentProxyPort "4096" //"8080"  //"4096" //
 
 #define SEND 0
 #define RECV 1
@@ -123,14 +123,14 @@ int main(void){
       
     iResult = -1;
     for(int i=0; i<MAXCONNECTION; i++){
-      if( sockmng[i].status == THREADREADY ){ /* THREADREADY‚È‚ç CreateThread ‚µAiResult=iBƒ‹[ƒv‚ªÅŒã‚Ü‚Å‚¢‚Á‚½ê‡‚Íuthread¶¬‚É¸”s‚µ‚½v‚Æ‚¢‚¤‚±‚Æ‚ÅiResult=-1‚Ì‚Ü‚Ü */
+      if( sockmng[i].status == THREADREADY ){ /* THREADREADYãªã‚‰ CreateThread ã—ã€iResult=iã€‚ãƒ«ãƒ¼ãƒ—ãŒæœ€å¾Œã¾ã§ã„ã£ãŸå ´åˆã¯ã€Œthreadç”Ÿæˆã«å¤±æ•—ã—ãŸã€ã¨ã„ã†ã“ã¨ã§iResult=-1ã®ã¾ã¾ */
 
 #ifdef DEBUG	
 	printf("sockid:%d\n",i);
 #endif //DEBUG       
 	sockmng[i].status = THREADRUNNING;
 	sockmng[i].csocket = ClientSocket ;
-	sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ‚Ğ‚«‚·‚¤‚Í©ID‚È‚ÇŠÜ‚ñ‚¾\‘¢‘Ì‚É‚·‚é–BI—¹ƒXƒe[ƒ^ƒX‚ğ•Ô‚·‚½‚ß */
+	sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ã²ãã™ã†ã¯è‡ªIDãªã©å«ã‚“ã æ§‹é€ ä½“ã«ã™ã‚‹äº‹ã€‚çµ‚äº†ã‚¹ãƒ†ãƒ¼ã‚¿ã‚¹ã‚’è¿”ã™ãŸã‚ */
 	iResult = i;
 	break;
       }
@@ -145,7 +145,7 @@ int main(void){
       sockmng[iResult].status = THREADREADY;
       sockmng[iResult].hThread = NULL ;
       sockmng[iResult].csocket = INVALID_SOCKET ;
-      /* return iResult;  /* ì‚ê‚È‚©‚Á‚½A‚Æ‹L˜^‚·‚é‚¾‚¯‚Å“®‚«‚Â‚Ã‚¯‚é‚½‚ßAmain() ‚Å‚Í return ‚µ‚È‚¢ */
+      /* return iResult;  /* ä½œã‚Œãªã‹ã£ãŸã€ã¨è¨˜éŒ²ã™ã‚‹ã ã‘ã§å‹•ãã¤ã¥ã‘ã‚‹ãŸã‚ã€main() ã§ã¯ return ã—ãªã„ */
     }
   }
 
@@ -160,10 +160,10 @@ int main(void){
 
 
 
-/* óMƒXƒŒƒbƒhƒ‹[ƒeƒBƒ“ */
-DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
-  /* LPVOIDŒ^ ˆø”‚Ìarglist‚Æ‚µ‚Ä“n‚³‚ê‚éB
-  ‚æ‚Ñ‚¾‚µ‘¤‚Í (HANDLE)hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitReceiveThread, &(sockmng[i]), 0, &dwThreadID);
+/* å—ä¿¡ã‚¹ãƒ¬ãƒƒãƒ‰ãƒ«ãƒ¼ãƒ†ã‚£ãƒ³ */
+DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng ä¿®æ­£
+  /* LPVOIDå‹ å¼•æ•°ã®arglistã¨ã—ã¦æ¸¡ã•ã‚Œã‚‹ã€‚
+  ã‚ˆã³ã ã—å´ã¯ (HANDLE)hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitReceiveThread, &(sockmng[i]), 0, &dwThreadID);
   */
 
   char clrecvbuf[DEFAULT_BUFLEN], cnrecvbuf[DEFAULT_BUFLEN];
@@ -174,11 +174,11 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
   int recvbuflen = DEFAULT_BUFLEN , cnrecvbuflen, clrecvbuflen;
   
   int sockid = ((sockMng *)sockmng)->sockid; 
-  SOCKET ClientSocket = ((sockMng *)sockmng)->csocket; /* sockmng ‚ğ sockMng * ‚ÉCAST‚µ‚ÄA‚»‚Ìcsocket‚ğæ‚èo‚µ ClientSocket ‚Ö“ü‚ê‚é */
+  SOCKET ClientSocket = ((sockMng *)sockmng)->csocket; /* sockmng ã‚’ sockMng * ã«CASTã—ã¦ã€ãã®csocketã‚’å–ã‚Šå‡ºã— ClientSocket ã¸å…¥ã‚Œã‚‹ */
   SOCKET ConnectSocket ;
   
 
-  fd_set fdReadAtRcvThread;
+  fd_set fdReadAtRcvThread , fds;
   struct timeval timeoutAtRcvThread;
   int nResultAtRcvThread;
 
@@ -188,11 +188,11 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
 
   DWORD dwNonBlocking = 1;
 
-    /* proxy‚Ö‚Ìƒ\ƒPƒbƒg‚ğ¶¬‚·‚é */
+    /* proxyã¸ã®ã‚½ã‚±ãƒƒãƒˆã‚’ç”Ÿæˆã™ã‚‹ */
   ConnectSocket = makeConnectSocket(ParentProxyHost , ParentProxyPort);
 
   if( ConnectSocket == INVALID_SOCKET ){
-    /* ¶¬‚É¸”s‚µ‚½‚ç‚±‚ÌƒXƒŒƒbƒh‚ÍÁ‚¦‚é */
+    /* ç”Ÿæˆã«å¤±æ•—ã—ãŸã‚‰ã“ã®ã‚¹ãƒ¬ãƒƒãƒ‰ã¯æ¶ˆãˆã‚‹ */
     printf("makeConnectSocket fail: %d\n", WSAGetLastError());
     closesocket(ConnectSocket);
     closesocket(ClientSocket);
@@ -200,11 +200,11 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
     ExitThread(TRUE);
   }
 
-  //ioctlsocket(ClientSocket, FIONBIO, &dwNonBlocking);
-  //ioctlsocket(ConnectSocket, FIONBIO, &dwNonBlocking);
+  ioctlsocket(ClientSocket, FIONBIO, &dwNonBlocking);
+  ioctlsocket(ConnectSocket, FIONBIO, &dwNonBlocking);
   
-  /* ƒ‹[ƒv */
-  do {
+  /* ãƒ«ãƒ¼ãƒ— */
+  //do {
     /* 
        ClientRecv
          1:reslut==0 -> connection close
@@ -215,10 +215,14 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
     */
 
 
-    FD_ZERO(&fdReadAtRcvThread);
-    FD_SET(ClientSocket,  &fdReadAtRcvThread);
-    FD_SET(ConnectSocket, &fdReadAtRcvThread);
-
+  FD_ZERO(&fds);
+  FD_SET(ClientSocket,  &fds);
+  FD_SET(ConnectSocket, &fds);
+  
+  do{
+    
+    memcpy(&fdReadAtRcvThread, &fds, sizeof(fd_set));
+    
     nResultAtRcvThread = select(0, &fdReadAtRcvThread, NULL, NULL, &timeoutAtRcvThread);
 
 #ifdef DEBUG    
@@ -226,15 +230,15 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
 #endif
     
     /*if (nResultAtRcvThread == SOCKET_ERROR) {
-      printf("select‚ÌÀs‚É¸”s‚µ‚Ü‚µ‚½B\n");
+      printf("selectã®å®Ÿè¡Œã«å¤±æ•—ã—ã¾ã—ãŸã€‚\n");
       closesocket(ClientSocket);
       closesocket(ConnectSocket);
       break;
       } else*/
 
-    /* recvbuf ‚ªuƒf[ƒ^‚ ‚èv‚È‚ç‚Î‘ÎŒü‘¤‚É‘—M */
-    /* char* ‚Ìƒf[ƒ^‚Éƒ‚ƒm‚ª“ü‚Á‚Ä‚¢‚é‚©‚Ç‚¤‚©‚ğ‚Ç‚¤’²‚×‚é? */
-    /* recvbuf ‚Í ˆê•¶š–Ú‚ªNULL‚È‚ç‚Î‹ó‚ÆŒ©˜ô‚·‚Å‘åä•v‚©‚Ç‚¤‚©? */
+    /* recvbuf ãŒã€Œãƒ‡ãƒ¼ã‚¿ã‚ã‚Šã€ãªã‚‰ã°å¯¾å‘å´ã«é€ä¿¡ */
+    /* char* ã®ãƒ‡ãƒ¼ã‚¿ã«ãƒ¢ãƒãŒå…¥ã£ã¦ã„ã‚‹ã‹ã©ã†ã‹ã‚’ã©ã†èª¿ã¹ã‚‹? */
+    /* recvbuf ã¯ ä¸€æ–‡å­—ç›®ãŒNULLãªã‚‰ã°ç©ºã¨è¦‹åšã™ã§å¤§ä¸ˆå¤«ã‹ã©ã†ã‹? */
 
     if ( clrecvbuf[0] != '\0' ){
 
@@ -255,23 +259,23 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
     }
       
     
-    if (nResultAtRcvThread == 0){ //‰½‚àƒ\ƒPƒbƒg‚É—ˆ‚Ä‚¢‚È‚¢
+    if (nResultAtRcvThread == 0){ //ä½•ã‚‚ã‚½ã‚±ãƒƒãƒˆã«æ¥ã¦ã„ãªã„
       continue;
     }else{ 
-      /* Socket‚ÉóM‚ ‚è */
+      /* Socketã«å—ä¿¡ã‚ã‚Š */
       
       if (FD_ISSET(ClientSocket, &fdReadAtRcvThread)){
-	/* Client ‚©‚çóM ƒf[ƒ^‚Í clrecvbuf ‚É‚«‚ë‚­‚³‚ê‚é
+	/* Client ã‹ã‚‰å—ä¿¡ ãƒ‡ãƒ¼ã‚¿ã¯ clrecvbuf ã«ãã‚ãã•ã‚Œã‚‹
 	   >0 : data received
-	   0  : connection close (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
-	   -1 : no data (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
-	   <0 : receive fail (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
+	   0  : connection close (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
+	   -1 : no data (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
+	   <0 : receive fail (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
 	*/
 	iResult = sendrecvdata(sockid, RECV, ClientSocket, clrecvbuf, recvbuflen, ConnectSocket);
 
-	/* iResult ‚ªƒGƒ‰[‚âƒZƒbƒVƒ‡ƒ“ƒNƒ[ƒY‚¾‚Á‚½‚ç do ƒ‹[ƒv‚ğ break ‚µ‚ÄƒXƒŒƒbƒh‚ğI—¹‚µ‚Ämain‚É–ß‚é */
-	/* >0 ƒf[ƒ^‚ª‚ ‚é‚Ì‚È‚ç“Ç‚İæ‚è send ‚·‚é */
-	/* -1 ƒf[ƒ^‚ª‚È‚¢‚Ì‚È‚çŸ‚Ìƒ`ƒFƒbƒN‚Ö(ConnectSocket‚Ìƒ`ƒFƒbƒN‚Ö) */
+	/* iResult ãŒã‚¨ãƒ©ãƒ¼ã‚„ã‚»ãƒƒã‚·ãƒ§ãƒ³ã‚¯ãƒ­ãƒ¼ã‚ºã ã£ãŸã‚‰ do ãƒ«ãƒ¼ãƒ—ã‚’ break ã—ã¦ã‚¹ãƒ¬ãƒƒãƒ‰ã‚’çµ‚äº†ã—ã¦mainã«æˆ»ã‚‹ */
+	/* >0 ãƒ‡ãƒ¼ã‚¿ãŒã‚ã‚‹ã®ãªã‚‰èª­ã¿å–ã‚Š send ã™ã‚‹ */
+	/* -1 ãƒ‡ãƒ¼ã‚¿ãŒãªã„ã®ãªã‚‰æ¬¡ã®ãƒã‚§ãƒƒã‚¯ã¸(ConnectSocketã®ãƒã‚§ãƒƒã‚¯ã¸) */
 	if( iResult < 0 ){
 	  break;
 	}else{
@@ -283,17 +287,17 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
       //else 
       
       if (FD_ISSET(ConnectSocket, &fdReadAtRcvThread)){
-	/* ConnectServer ‚©‚çóM ƒf[ƒ^‚Í cnrecvbuf ‚É‚«‚ë‚­‚³‚ê‚é
+	/* ConnectServer ã‹ã‚‰å—ä¿¡ ãƒ‡ãƒ¼ã‚¿ã¯ cnrecvbuf ã«ãã‚ãã•ã‚Œã‚‹
 	   >0 : data received
-	   0  : connection close (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
-	   -1 : no data (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
-	   <0 : receive fail (closed Ï‚İ‚Å return‚µ‚Ä‚­‚é)
+	   0  : connection close (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
+	   -1 : no data (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
+	   <0 : receive fail (closed æ¸ˆã¿ã§ returnã—ã¦ãã‚‹)
 	*/
 	iResult = sendrecvdata(sockid, RECV, ConnectSocket, cnrecvbuf, recvbuflen, ClientSocket);
 
-	/* iResult ‚ªƒGƒ‰[‚âƒZƒbƒVƒ‡ƒ“ƒNƒ[ƒY‚¾‚Á‚½‚ç do ƒ‹[ƒv‚ğ break ‚µ‚ÄƒXƒŒƒbƒh‚ğI—¹‚µ‚Ämain‚É–ß‚é */
-	/* >0 ƒf[ƒ^‚ª‚ ‚é‚Ì‚È‚ç“Ç‚İæ‚è send ‚·‚é */
-	/* -1 ƒf[ƒ^‚ª‚È‚¢‚Ì‚È‚çŸ‚Ìƒ`ƒFƒbƒN‚Ö(ConnectSocket‚Ìƒ`ƒFƒbƒN‚Ö) */
+	/* iResult ãŒã‚¨ãƒ©ãƒ¼ã‚„ã‚»ãƒƒã‚·ãƒ§ãƒ³ã‚¯ãƒ­ãƒ¼ã‚ºã ã£ãŸã‚‰ do ãƒ«ãƒ¼ãƒ—ã‚’ break ã—ã¦ã‚¹ãƒ¬ãƒƒãƒ‰ã‚’çµ‚äº†ã—ã¦mainã«æˆ»ã‚‹ */
+	/* >0 ãƒ‡ãƒ¼ã‚¿ãŒã‚ã‚‹ã®ãªã‚‰èª­ã¿å–ã‚Š send ã™ã‚‹ */
+	/* -1 ãƒ‡ãƒ¼ã‚¿ãŒãªã„ã®ãªã‚‰æ¬¡ã®ãƒã‚§ãƒƒã‚¯ã¸(ConnectSocketã®ãƒã‚§ãƒƒã‚¯ã¸) */
 	if( iResult < 0 ){
 	  break;
 	}else{
@@ -303,8 +307,6 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
 	
       }// if FD_ISSET(ConnectSocket, ,,,)
 	
-
-
       
     }
   }while (iResult > 0);
@@ -312,15 +314,15 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng C³
   ((sockMng *)sockmng)->status = THREADSTOP ;
   
   ExitThread(TRUE);
-  // –ß‚è’l‚ğ‘‚­•K—v‚ª‚ ‚é? 
+  // æˆ»ã‚Šå€¤ã‚’æ›¸ãå¿…è¦ãŒã‚ã‚‹? 
 }
 
 
 
 
 
-/* socket ‚ğ¶¬Abind‚µAlisten ‚·‚é‚Ü‚Å */
-/* ˆø”‚Íƒ|[ƒg”Ô†(•¶šƒŠƒeƒ‰ƒ‹‚Åƒ|[ƒg‚ğ‹LÚ ex. "1100" ) LPSTR ‚Æ‚Í‚»‚¤‚¢‚¤‚à‚Ì‚ç‚µ‚¢ */
+/* socket ã‚’ç”Ÿæˆã€bindã—ã€listen ã™ã‚‹ã¾ã§ */
+/* å¼•æ•°ã¯ãƒãƒ¼ãƒˆç•ªå·(æ–‡å­—ãƒªãƒ†ãƒ©ãƒ«ã§ãƒãƒ¼ãƒˆã‚’è¨˜è¼‰ ex. "1100" ) LPSTR ã¨ã¯ãã†ã„ã†ã‚‚ã®ã‚‰ã—ã„ */
 SOCKET makeListenSocket(LPSTR localportnum){
 
   WSADATA wsaData;
@@ -382,8 +384,8 @@ SOCKET makeListenSocket(LPSTR localportnum){
   
 }
 
-/* socket ‚ğ¶¬Abind‚µAconnect ‚·‚é‚Ü‚Å */
-/* ˆø”‚Íƒ|[ƒg”Ô†(•¶šƒŠƒeƒ‰ƒ‹‚Åƒ|[ƒg‚ğ‹LÚ ex. "1100" ) LPSTR ‚Æ‚Í‚»‚¤‚¢‚¤‚à‚Ì‚ç‚µ‚¢ */
+/* socket ã‚’ç”Ÿæˆã€bindã—ã€connect ã™ã‚‹ã¾ã§ */
+/* å¼•æ•°ã¯ãƒãƒ¼ãƒˆç•ªå·(æ–‡å­—ãƒªãƒ†ãƒ©ãƒ«ã§ãƒãƒ¼ãƒˆã‚’è¨˜è¼‰ ex. "1100" ) LPSTR ã¨ã¯ãã†ã„ã†ã‚‚ã®ã‚‰ã—ã„ */
 SOCKET makeConnectSocket(char* hostname, LPSTR localportnum){
 
   WSADATA wsaData;
@@ -428,7 +430,7 @@ SOCKET makeConnectSocket(char* hostname, LPSTR localportnum){
   }
   
   // free 'reslut'(getaddrinfo's result)
-  freeaddrinfo(result);
+  //freeaddrinfo(result);
 
   return retSocket ;
 
@@ -459,10 +461,10 @@ int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int r
   }
   
   if (iResult == 0){
-    /* 1: sockfrom ‚©‚ç‚ÌƒRƒlƒNƒVƒ‡ƒ“‚ªƒNƒ[ƒY‚µ‚¿‚á‚Á‚½¨ƒZƒbƒVƒ‡ƒ“I—¹ */
+    /* 1: sockfrom ã‹ã‚‰ã®ã‚³ãƒã‚¯ã‚·ãƒ§ãƒ³ãŒã‚¯ãƒ­ãƒ¼ã‚ºã—ã¡ã‚ƒã£ãŸâ†’ã‚»ãƒƒã‚·ãƒ§ãƒ³çµ‚äº† */
     printf("sockid:%d/Connection closing...\n",sockid);
 
-    /* shutdown ‚ğ‚İ‚é */
+    /* shutdown ã‚’è©¦ã¿ã‚‹ */
     if (SOCKET_ERROR == shutdown(sockfrom, SD_BOTH) ) {
 
 #ifdef DEBUG
@@ -481,7 +483,7 @@ int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int r
     
   }else if (iResult < -1 ){  /* for recv's error */
 
-    /* from ‚©‚ç‚ÌóM‚Å¸”s ¨ ƒRƒlƒNƒVƒ‡ƒ“‚ªˆÙí‚Æ‚İ‚È‚µƒZƒbƒVƒ‡ƒ“I—¹ */
+    /* from ã‹ã‚‰ã®å—ä¿¡ã§å¤±æ•— â†’ ã‚³ãƒã‚¯ã‚·ãƒ§ãƒ³ãŒç•°å¸¸ã¨ã¿ãªã—ã‚»ãƒƒã‚·ãƒ§ãƒ³çµ‚äº† */
 #ifdef DEBUG
     printf("sockid:%d/return:%d/%s failed: %d\n", sockid, iResult, mode_str, WSAGetLastError());
 #endif
@@ -530,5 +532,3 @@ char *convbuf(char *str){
 
   return ret;
 }
-       
-    
