@@ -182,7 +182,7 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
   struct timeval timeoutAtRcvThread;
   int nResultAtRcvThread;
 
-  timeoutAtRcvThread.tv_sec = 3 ;
+  timeoutAtRcvThread.tv_sec = 0 ; //3 ;
   timeoutAtRcvThread.tv_usec = 0 ; //500*1000 ;
 
 
@@ -229,20 +229,13 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
     printf("nResultAtrcvthread=%d\n",nResultAtRcvThread);
 #endif
     
-    /*if (nResultAtRcvThread == SOCKET_ERROR) {
-      printf("selectの実行に失敗しました。\n");
-      closesocket(ClientSocket);
-      closesocket(ConnectSocket);
-      break;
-      } else*/
-
     /* recvbuf が「データあり」ならば対向側に送信 */
     /* char* のデータにモノが入っているかどうかをどう調べる? */
     /* recvbuf は 一文字目がNULLならば空と見做すで大丈夫かどうか? */
 
     if ( clrecvbuf[0] != '\0' ){
 
-      iResult = sendrecvdata(sockid, SEND, ConnectSocket, clrecvbuf, clrecvbuflen, ClientSocket);
+      iResult = senddata(sockid, ConnectSocket, clrecvbuf, clrecvbuflen, ClientSocket);
 
       clrecvbuf[0] = '\0';
       clrecvbuflen = 0;
@@ -250,7 +243,7 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
 
     }else if ( cnrecvbuf[0] != '\0' ){
       
-      iResult = sendrecvdata(sockid, SEND, ClientSocket, cnrecvbuf, cnrecvbuflen, ConnectSocket);
+      iResult = senddata(sockid, ClientSocket, cnrecvbuf, cnrecvbuflen, ConnectSocket);
 
       cnrecvbuf[0] = '\0';
       cnrecvbuflen = 0;
@@ -271,12 +264,14 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
 	   -1 : no data (closed 済みで returnしてくる)
 	   <0 : receive fail (closed 済みで returnしてくる)
 	*/
-	iResult = sendrecvdata(sockid, RECV, ClientSocket, clrecvbuf, recvbuflen, ConnectSocket);
+	iResult = recvdata(sockid, ClientSocket, clrecvbuf, recvbuflen, ConnectSocket);
 
 	/* iResult がエラーやセッションクローズだったら do ループを break してスレッドを終了してmainに戻る */
 	/* >0 データがあるのなら読み取り send する */
 	/* -1 データがないのなら次のチェックへ(ConnectSocketのチェックへ) */
 	if( iResult < 0 ){
+	  FD_CLR(ClientSocket, &fdReadAtRcvThread);
+	  FD_CLR(ConnectSocket, &fdReadAtRcvThread);
 	  break;
 	}else{
 	  clrecvbuflen = iResult ;
@@ -293,12 +288,14 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
 	   -1 : no data (closed 済みで returnしてくる)
 	   <0 : receive fail (closed 済みで returnしてくる)
 	*/
-	iResult = sendrecvdata(sockid, RECV, ConnectSocket, cnrecvbuf, recvbuflen, ClientSocket);
+	iResult = recvdata(sockid, ConnectSocket, cnrecvbuf, recvbuflen, ClientSocket);
 
 	/* iResult がエラーやセッションクローズだったら do ループを break してスレッドを終了してmainに戻る */
 	/* >0 データがあるのなら読み取り send する */
 	/* -1 データがないのなら次のチェックへ(ConnectSocketのチェックへ) */
 	if( iResult < 0 ){
+	  FD_CLR(ConnectSocket, &fdReadAtRcvThread);
+	  FD_CLR(ClientSocket, &fdReadAtRcvThread);
 	  break;
 	}else{
 	  cnrecvbuflen = iResult ;
@@ -437,7 +434,8 @@ SOCKET makeConnectSocket(char* hostname, LPSTR localportnum){
 }
 
 
-int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int recvbuflen , SOCKET sockto){ 
+
+int senddata(int sockid, SOCKET sockfrom , char *recvbuf , int recvbuflen , SOCKET sockto){ 
   /*
     return:
      >0 : data received/send
@@ -446,29 +444,81 @@ int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int r
      <0 : receive fail/send failed
    */
   int iResult;
-  char *mode_str ; //[2][5] = { "RECV" , "SEND" };
 
-  if( mode == RECV ){
-    iResult = recv(sockfrom, recvbuf, recvbuflen, 0);
-#ifdef DEBUG
-    mode_str = "RECV" ;
-#endif //DEBUG
-  }else{
-    iResult = send(sockfrom, recvbuf, recvbuflen, 0);
-#ifdef DEBUG
-    mode_str = "SEND" ; 
-#endif //DEBUG
-  }
+  iResult = send(sockfrom, recvbuf, recvbuflen, 0);
   
   if (iResult == 0){
     /* 1: sockfrom からのコネクションがクローズしちゃった→セッション終了 */
-    printf("sockid:%d/Connection closing...\n",sockid);
+    printf("sockid:%d/senddata Connection closing...\n",sockid);
 
     /* shutdown を試みる */
     if (SOCKET_ERROR == shutdown(sockfrom, SD_BOTH) ) {
 
 #ifdef DEBUG
-      printf("sockid:%d/socket shutdown/%s failed: %d\n", sockid, mode_str, WSAGetLastError());
+      printf("sockid:%d/socket shutdown/senddata failed: %d\n", sockid, WSAGetLastError());
+#endif
+      
+    }
+    
+#ifdef DEBUG
+    printf("sockid:%d/Sockets will close\n",sockid);
+#endif
+    closesocket(sockfrom);
+    closesocket(sockto);
+    return iResult ;
+
+    
+  }else if (iResult < -1 ){  /* for send error */
+
+    /* from からの送信で失敗 → コネクションが異常とみなしセッション終了 */
+#ifdef DEBUG
+    printf("sockid:%d/return:%d/senddata failed: %d\n", sockid, iResult, WSAGetLastError());
+#endif
+    closesocket(sockfrom);
+    closesocket(sockto);
+    return iResult;
+
+  }else if(iResult == SOCKET_ERROR ){ /* for send's error */
+
+#ifdef DEBUG
+    printf("sockid:%d/return:%d/senddata failed: %d\n", sockid, iResult, WSAGetLastError());
+#endif
+    closesocket(sockfrom);
+    closesocket(sockto);
+    return -1;
+    
+  }else{
+
+    /* iRresult >0 OR -1=no data */
+#ifdef DEBUG
+    printf("sockid:%d/senddata return:%d \'%s\'\n", sockid, iResult, convbuf(recvbuf));
+#endif
+    return iResult;
+  }
+}
+
+
+int recvdata(int sockid, SOCKET sockfrom , char *recvbuf , int recvbuflen , SOCKET sockto){ 
+  /*
+    return:
+     >0 : data received/send
+     0  : connection close
+     -1 : no data
+     <0 : receive fail/send failed
+   */
+  int iResult;
+
+  iResult = recv(sockfrom, recvbuf, recvbuflen, 0);
+  
+  if (iResult == 0){
+    /* 1: sockfrom からのコネクションがクローズしちゃった→セッション終了 */
+    printf("sockid:%d/recvdata Connection closing...\n",sockid);
+
+    /* shutdown を試みる */
+    if (SOCKET_ERROR == shutdown(sockfrom, SD_BOTH) ) {
+
+#ifdef DEBUG
+      printf("sockid:%d/socket shutdown/recvdata failed: %d\n", sockid, WSAGetLastError());
 #endif
       
     }
@@ -485,16 +535,16 @@ int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int r
 
     /* from からの受信で失敗 → コネクションが異常とみなしセッション終了 */
 #ifdef DEBUG
-    printf("sockid:%d/return:%d/%s failed: %d\n", sockid, iResult, mode_str, WSAGetLastError());
+    printf("sockid:%d/return:%d/recvdata failed: %d\n", sockid, iResult, WSAGetLastError());
 #endif
     closesocket(sockfrom);
     closesocket(sockto);
     return iResult;
 
-  }else if(iResult == SOCKET_ERROR ){ /* for send's error */
+  }else if(iResult == SOCKET_ERROR ){ /* for recv's error */
 
 #ifdef DEBUG
-    printf("sockid:%d/return:%d/%s failed: %d\n", sockid, iResult, mode_str, WSAGetLastError());
+    printf("sockid:%d/return:%d/recvdata failed: %d\n", sockid, iResult, WSAGetLastError());
 #endif
     closesocket(sockfrom);
     closesocket(sockto);
@@ -504,11 +554,10 @@ int sendrecvdata(int sockid, char mode , SOCKET sockfrom , char *recvbuf , int r
 
     /* iRresult >0 OR -1=no data */
 #ifdef DEBUG
-    printf("sockid:%d/%s return:%d \'%s\'\n", sockid, mode_str, iResult, convbuf(recvbuf));
+    printf("sockid:%d/recvdataa return:%d \'%s\'\n", sockid, iResult, convbuf(recvbuf));
 #endif
     return iResult;
   }
-
 }
 
 
