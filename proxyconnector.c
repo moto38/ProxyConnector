@@ -1,18 +1,18 @@
 #undef UNICODE
 
-#define WIN32_LEAN_AND_MEAN
-#define TEMP_NOUSE
 
 #include <stdio.h>
 #include <string.h>
 
 
 //#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <process.h>
-#include <winsock2.h>
 #include <ws2tcpip.h>
 
+#pragma comment (lib, "Ws2_32.lib")
 
 //SOCKET fd;
 
@@ -44,22 +44,35 @@
 #define USE_SELECT
 
 #define ParentProxyHost "localhost"
-#define ParentProxyPort "8080"  //"4096" //
+#define ParentProxyPort "8080"  //"14096" //
 
 
 SOCKET makeListenSocket(LPSTR);
 SOCKET makeConnectSocket(char* HOSTNAME , LPSTR);
-DWORD WINAPI waitRecieveThread(LPVOID);
-int sendrecvdata(int , char , SOCKET , char* , int , SOCKET);
+DWORD WINAPI subthreadmgr(LPVOID);
+DWORD WINAPI communicationThread(LPVOID);
+int senddata(int sockid, SOCKET sockfrom , char *buf , int buflen , SOCKET sockto);
+int recvdata(int sockid, SOCKET sockfrom , char *buf , int buflen , SOCKET sockto);
 char *convbuf(char*);
 
 typedef struct{
   HANDLE* hThread;
-  SOCKET csocket;
+  HANDLE* cThread; /* ClientSocket reciever */
+  HANDLE* sThread; /* ConnectScoket reciever */
+  SOCKET csocket; /* ClientSocket */
+  SOCKET ssocket; /* ConnectSocket */
   char   status;
   int    sockid;
 } sockMng ;
 
+
+typedef struct{
+  HANDLE* hThread;
+  SOCKET* csocket; /* ClientSocket */
+  SOCKET* ssocket; /* ConnectSocket */
+  char* status;
+  int* sockid;
+} subsock ;
 
 
 int main(void){
@@ -91,7 +104,10 @@ int main(void){
   for(int i=0;i<MAXCONNECTION;i++){
     hThreadList[i] = NULL;
     sockmng[i].hThread = NULL;
+    sockmng[i].cThread = NULL;
+    sockmng[i].sThread = NULL;
     sockmng[i].csocket = INVALID_SOCKET;
+    sockmng[i].ssocket = INVALID_SOCKET;
     sockmng[i].status = THREADREADY ;
     sockmng[i].sockid = i;
   }
@@ -115,75 +131,40 @@ int main(void){
     ;
   }
 
-  ioctlsocket(ListenSocket, FIONBIO, &dwNonBlocking);
-
-  FD_ZERO(&readfds);
-  FD_SET(ListenSocket ,&readfds);
-
-#ifdef DEBUG
-  printf("FD_SET(ListenSocket, &readfds)  readfds:%d\n", readfds);
-#endif
-
   while(1){
-    memcpy(&fds, &readfds, sizeof(fd_set));    
-    iResult = select(256, &fds, NULL, NULL, &timeout);
-    //iResult = select(0, &fds, NULL, NULL, NULL);
-  
-    if( iResult == 0 ){
-      /* timeout */
-#ifdef DEBUG
-      printf("ListenSocket select timeout\n");
-#endif
-      continue;
-    }else if( iResult < 0 ){
-      /* Error */
-#ifdef DEBUG
-      printf("ListenSocket select Error select:%d\n", iResult);
-      printf("Error at select(): %ld\n", WSAGetLastError());
-#endif
-      break ;
-      
-    }else{
-      //if( iResult != 0){
-#ifdef DEBUG
-      printf("ListenSocket:%d fds:%d\n",ListenSocket, fds);
-#endif
-      if(FD_ISSET(ListenSocket , &fds)){
-	/* socket connection come */
-	AddrLen = sizeof(SOCKADDR_STORAGE);
-	//AddrLen = sizeof(sockaddr_in);
-	ClientSocket = accept(ListenSocket, (LPSOCKADDR)&sockAddr, &AddrLen);
-	// getnameinfo( (LPSOCKADDR)&sockAddr, AddrLen, (char*)HostName, sizeof(HostName), NULL, 0, 0);
-
-	if (ClientSocket == INVALID_SOCKET || ClientSocket == SOCKET_ERROR ) {
-	  printf("accept failed: %d\n", WSAGetLastError());
-	  closesocket(ListenSocket);
-	  WSACleanup();
-	  return 1;
-	}
-      
-	iResult = -1;
-	for(int i=0; i<MAXCONNECTION; i++){
-	  if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread し、iResult=i。ループが最後までいった場合は「thread生成に失敗した」ということでiResult=-1のまま */
-	    
-#ifdef DEBUG	
-	    printf("sockid:%d\n",i);
-#endif //DEBUG       
-	    sockmng[i].status = THREADRUNNING;
-	    sockmng[i].csocket = ClientSocket ;
-	    sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitRecieveThread, &(sockmng[i]), 0, &dwThreadID); /* ひきすうは自IDなど含んだ構造体にする事。終了ステータスを返すため */
-	    iResult = i;
-	    break;
-	  }
-	}
+    /* socket connection come */
+    AddrLen = sizeof(SOCKADDR_STORAGE);
+    //AddrLen = sizeof(sockaddr_in);
+    ClientSocket = accept(ListenSocket, (LPSOCKADDR)&sockAddr, &AddrLen);
+    // getnameinfo( (LPSOCKADDR)&sockAddr, AddrLen, (char*)HostName, sizeof(HostName), NULL, 0, 0);
     
-	if( iResult == -1 ){
-	  printf("can not make Thread: %d\n",WSAGetLastError());
-	}
+    if (ClientSocket == INVALID_SOCKET || ClientSocket == SOCKET_ERROR ) {
+      printf("accept failed: %d\n", WSAGetLastError());
+      closesocket(ListenSocket);
+      WSACleanup();
+      return 1; // or continue; ?
+    }
+    
+    iResult = -1;
+    for(int i=0; i<MAXCONNECTION; i++){
+      if( sockmng[i].status == THREADREADY ){ /* THREADREADYなら CreateThread し、iResult=i。ループが最後までいった場合は「thread生成に失敗した」ということでiResult=-1のまま */
+	
+#ifdef DEBUG	
+	printf("sockid:%d\n",i);
+#endif //DEBUG       
+	sockmng[i].status = THREADRUNNING;
+	sockmng[i].csocket = ClientSocket ;
+	sockmng[i].hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)subthreadmgr, &(sockmng[i]), 0, &dwThreadID); /* ひきすうは自IDなど含んだ構造体にする事。終了ステータスを返すため */
+	iResult = i;
+	break;
       }
     }
+    
+    if( iResult == -1 ){
+      printf("can not make Thread: %d\n",WSAGetLastError());
+    }
   }
-
+  
   for(int i=0; i<MAXCONNECTION; i++){   
     CloseHandle(sockmng[i].hThread);
   }
@@ -192,37 +173,87 @@ int main(void){
   return 0;
 }
 
-
-
-/* 受信スレッドルーティン */
-DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修正
+DWORD WINAPI communicationThread(LPVOID sockmng){
   /* LPVOID型 引数のarglistとして渡される。
-  よびだし側は (HANDLE)hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)waitReceiveThread, &(sockmng[i]), 0, &dwThreadID);
+  よびだし側は (HANDLE){c|s}hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)communicationThread, &(subsock), 0, &dwThreadID);
+  */
+  char recvbuf[DEFAULT_BUFLEN] ;
+  
+  int iResult ;
+  int recvbuflen = DEFAULT_BUFLEN ;
+  
+  int sockid = *(((subsock *)sockmng)->sockid); 
+  SOCKET fromSocket = *(((subsock *)sockmng)->csocket) ;
+  SOCKET toSocket = *(((subsock *)sockmng)->ssocket) ;
+  
+  int nResult;
+
+  memcpy(recvbuf , "\0" , 1);
+
+  /* ループ */
+  do{
+    
+    iResult = recvdata(sockid, fromSocket, recvbuf, recvbuflen, toSocket);
+	
+    /* iResult がエラーやセッションクローズだったら do ループを break してスレッドを終了してmainに戻る */
+    /* >0 データがあるのなら読み取り send する */
+    /* -1 データがないのならまたループ */
+    if( iResult < 0 ){
+      break;
+    }else{
+      recvbuflen = iResult ;
+#ifdef DEBUG
+      printf("SockID:%d has data from socket:%d, invoke senddata(). DATA=%s\n",sockid, fromSocket, recvbuf);
+#endif
+      
+      iResult = senddata(sockid, toSocket, recvbuf, recvbuflen, fromSocket);
+#ifdef DEBUG
+      printf("SockID:%d/senddata to toSocket:%d return:%d. DATA=%d\n",sockid, toSocket, iResult, recvbuf);
+#endif //DEBUG
+      if( iResult < 0 ){
+	break;
+      }else{
+	recvbuf[0] = '\0';
+	recvbuflen = 0;
+	continue;
+      }
+    }
+
+    if( *(((subsock *)sockmng)->status) == THREADSTOP ){
+      break;
+    }
+
+  }while(TRUE);
+
+#ifdef DEBUG
+  printf("SockID:%d thread stop.\n",sockid);
+#endif
+    
+  *(((subsock *)sockmng)->status) = THREADSTOP ;
+  
+  ExitThread(TRUE);
+}
+
+
+
+
+/* 受信スレッドマネージャー */
+DWORD WINAPI subthreadmgr(LPVOID sockmng){ //lpClientSocket -> sockmng 修正
+  /* LPVOID型 引数のarglistとして渡される。
+  よびだし側は (HANDLE)hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)subthreadmgr, &(sockmng[i]), 0, &dwThreadID);
   */
 
-  char clrecvbuf[DEFAULT_BUFLEN], cnrecvbuf[DEFAULT_BUFLEN];
-  
-  int fdissetResult , iResult ,nfds=0 ;
-  int recvbuflen = DEFAULT_BUFLEN , cnrecvbuflen, clrecvbuflen;
-  
+  int iResult, nResult;
+  HANDLE chThread, shThread ;
+
   int sockid = ((sockMng *)sockmng)->sockid; 
   SOCKET ClientSocket ;
   SOCKET ConnectSocket ;
+
+  DWORD cdwThreadID , sdwThreadID;
+
+  subsock csubsock , ssubsock;
   
-
-  fd_set readfds, fds;
-  struct timeval timeout;
-  int nResult;
-
-  DWORD dwNonBlocking = 1;
-
-  timeout.tv_sec = 0 ; //3 ;
-  timeout.tv_usec = 1000 ; //500*1000 ;
-
-  memcpy(clrecvbuf , "\0" , 1);
-  memcpy(cnrecvbuf , "\0" , 1);
-  
-
   
   /* Client/proxyへのソケット */
   ClientSocket = ((sockMng *)sockmng)->csocket; /* sockmng を sockMng * にCASTして、そのcsocketを取り出し ClientSocket へ入れる */
@@ -240,132 +271,37 @@ DWORD WINAPI waitRecieveThread(LPVOID sockmng){ //lpClientSocket -> sockmng 修�
 #ifdef DEBUG
   printf("SockId:%d ClientSocket:%d/ConnectSocket:%d\n",sockid, ClientSocket , ConnectSocket);
 #endif
-  /*
-  ioctlsocket(ClientSocket, FIONBIO, &dwNonBlocking);
-  ioctlsocket(ConnectSocket, FIONBIO, &dwNonBlocking);
-  */
 
-  FD_ZERO(&readfds);
-  FD_SET(ClientSocket,  &readfds);
-  FD_SET(ConnectSocket, &readfds);
-
+  /* ClientScoket 受信用スレッドの生成 */
+  csubsock.sockid = &(((sockMng *)sockmng)->sockid);
+  csubsock.csocket = &(ClientSocket);
+  csubsock.ssocket = &(ConnectSocket);
+  csubsock.status = &(((sockMng *)sockmng)->status);
+  chThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)communicationThread, &(csubsock), 0, &cdwThreadID);
+#ifdef DEBUG
+  printf("Sockid:%d ClientSocket thread:%d\n", sockid, cdwThreadID);
+#endif
+  
+  /* ConnectSocket 受信用スレッドの生成 */
+  ssubsock.sockid = &(((sockMng *)sockmng)->sockid);
+  ssubsock.csocket = &(ConnectSocket);
+  ssubsock.ssocket = &(ClientSocket);
+  ssubsock.status = &(((sockMng *)sockmng)->status);
+  shThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)communicationThread, &(ssubsock), 0, &sdwThreadID);
+#ifdef DEBUG
+  printf("Sockid:%d ConnectSocket thread:%d\n", sockid, sdwThreadID);
+#endif
 
   /* ループ */
   do{
-    memcpy(&fds, &readfds, sizeof(fd_set));
-    //nResult = select(0, &fds, NULL, NULL, &timeout);
-    nResult = select(0, &fds, NULL, NULL, NULL);
-    
-    //#ifdef DEBUG
-    //    printf("select return: nResul=%d\n",nResult);
-    //    printf("fds:%d/Address:%d\n",fds, &fds);
-    //    printf("select return: WSAGetLastError:%d\n", WSAGetLastError());
-    //#endif
-	
-    /* recvbuf が「データあり」ならば対向側に送信 */
-    /* char* のデータにモノが入っているかどうかをどう調べる? */
-    /* recvbuf は 一文字目がNULLならば空と見做すで大丈夫かどうか? */
-
-    if (nResult != 0){
-      /* Socketに受信あり */
-      //#ifdef DEBUG
-      //      printf("SockID:%d select return=%d",sockid , nResult);
-      //#endif
-      
-      fdissetResult =  FD_ISSET(ClientSocket, &fds);
-      if (fdissetResult){
-	/* Client から受信 データは clrecvbuf にきろくされる
-	   >0 : data received
-	   0  : connection close (closed 済みで returnしてくる)
-	   -1 : no data (closed 済みで returnしてくる)
-	   <0 : receive fail (closed 済みで returnしてくる)
-	*/
-#ifdef DEBUG
-	printf("SockID:%d/ClientSocket's FD_ISSET=%d\n",sockid, fdissetResult);
-#endif //DEBUG
-	
-	iResult = recvdata(sockid, ClientSocket, clrecvbuf, recvbuflen, ConnectSocket);
-	
-	/* iResult がエラーやセッションクローズだったら do ループを break してスレッドを終了してmainに戻る */
-	/* >0 データがあるのなら読み取り send する */
-	/* -1 データがないのなら次のチェックへ(ConnectSocketのチェックへ) */
-	if( iResult < 0 ){
-	  FD_CLR(ClientSocket, &fds);
-	  FD_CLR(ConnectSocket, &fds);
-	  break;
-	}else{
-	  clrecvbuflen = iResult ;
-#ifdef DEBUG
-	  printf("SockID:%d has data from client, invoke senddata().\n",sockid);
-#endif
-      
-	  iResult = senddata(sockid, ConnectSocket, clrecvbuf, clrecvbuflen, ClientSocket);
-#ifdef DEBUG
-	  printf("SockID:%d/senddata to ConnectSocket return:%d\n",sockid, iResult);
-#endif //DEBUG
-	  if( iResult < 0 ){
-	    FD_CLR(ClientSocket, &fds);
-	    FD_CLR(ConnectSocket, &fds);
-	    break;
-	  }else{
-	    clrecvbuf[0] = '\0';
-	    clrecvbuflen = 0;
-	    // continue;
-	  }
-	}
-	
-      }
-      
-      fdissetResult = FD_ISSET(ConnectSocket, &fds);
-      if (fdissetResult){
-	/* ConnectServer から受信 データは cnrecvbuf にきろくされる
-	   >0 : data received
-	   0  : connection close (closed 済みで returnしてくる)
-	   -1 : no data (closed 済みで returnしてくる)
-	   <0 : receive fail (closed 済みで returnしてくる)
-	*/
-#ifdef DEBUG
-	printf("SockID:%d/ConnectSocket's FD_ISSET=%d\n",sockid, fdissetResult);
-#endif //DEBUG
-	
-	iResult = recvdata(sockid, ConnectSocket, cnrecvbuf, recvbuflen, ClientSocket);
-	/* iResult がエラーやセッションクローズだったら do ループを break してスレッドを終了してmainに戻る */
-	/* >0 データがあるのなら読み取り send する */
-	/* -1 データがないのなら次のチェックへ(ConnectSocketのチェックへ) */
-	if( iResult < 0 ){
-	  FD_CLR(ConnectSocket, &fds);
-	  FD_CLR(ClientSocket, &fds);
-	  break;
-	}else{
-	  cnrecvbuflen = iResult ;
-#ifdef DEBUG
-	  printf("SockID:%d has data from connect server, invoke senddata().\n",sockid);
-#endif
-	  
-	  iResult = senddata(sockid, ClientSocket, cnrecvbuf, cnrecvbuflen, ConnectSocket);
-#ifdef DEBUG
-	  printf("SockID:%d/senddata to ClientSocket return:%d\n",sockid, iResult);
-#endif //DEBUG
-	  if( iResult < 0 ){
-	    FD_CLR(ClientSocket, &fds);
-	    FD_CLR(ConnectSocket, &fds);
-	    break;
-	  }else{
-	    cnrecvbuf[0] = '\0';
-	    cnrecvbuflen = 0;
-	    //continue;
-	  }
-	}
-      }
+    if( ((sockMng *)sockmng)->status == THREADSTOP ){
+      break;
     }
-    //memcpy(&fds, &readfds, sizeof(fd_set));
-
   }while(TRUE);
 
 #ifdef DEBUG
   printf("SockID:%d thread stop.\n",sockid);
 #endif
-    
   ((sockMng *)sockmng)->status = THREADSTOP ;
   
   ExitThread(TRUE);
@@ -386,7 +322,6 @@ SOCKET makeListenSocket(LPSTR localportnum){
   LPADDRINFO result;
   SOCKET retSocket = INVALID_SOCKET;
 
-#ifdef TEMP_NOUSE
   ZeroMemory(&hints, sizeof(ADDRINFO));
   hints.ai_family   = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
@@ -400,20 +335,10 @@ SOCKET makeListenSocket(LPSTR localportnum){
     WSACleanup();
     return INVALID_SOCKET ;
   }
-#else
-  memset(&addr, 0, sizeof(struct sockaddr_in));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(atoi(localportnum));
-  addr.sin_addr.S_un.S_addr = INADDR_ANY;
-#endif
 
 
   // Create a SOCKET for the server to listen for client connections
-#ifdef TEMP_NOUSE
   retSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-#else
-  retSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-#endif
   if (retSocket == INVALID_SOCKET) {
     printf("Error at socket(): %ld\n", WSAGetLastError());
     freeaddrinfo(result);
@@ -422,11 +347,7 @@ SOCKET makeListenSocket(LPSTR localportnum){
   }
   
   // Setup the TCP listening socket(BIND)
-#ifdef TEMP_NOUSE
   iResult = bind( retSocket, result->ai_addr, (int)result->ai_addrlen);
-#else
-  iResult = bind( retSocket, (struct sockaddr *)&addr, sizeof(addr));
-#endif
   if (iResult == SOCKET_ERROR) {
     printf("bind failed with error: %d\n", WSAGetLastError());
     closesocket(retSocket);
@@ -435,10 +356,8 @@ SOCKET makeListenSocket(LPSTR localportnum){
     return INVALID_SOCKET ;
   }
   
-  
   // Setup the TCP listening socket(listen)
   if ( listen( retSocket, SOMAXCONN ) == SOCKET_ERROR ) {
-  //if ( listen( retSocket, 15 ) == SOCKET_ERROR ) {
     printf( "Listen failed with error: %ld\n", WSAGetLastError() );
     closesocket(retSocket);
     freeaddrinfo(result);
@@ -446,11 +365,6 @@ SOCKET makeListenSocket(LPSTR localportnum){
     return INVALID_SOCKET ;
   }
 
-  // free 'reslut'(getaddrinfo's result)
-#ifdef TEMP_NOUSE
-  freeaddrinfo(result);
-#endif
-  
   return retSocket ;
 }
 
@@ -498,9 +412,6 @@ SOCKET makeConnectSocket(char* hostname, LPSTR localportnum){
     WSACleanup();
     return INVALID_SOCKET ;
   }
-  
-  // free 'reslut'(getaddrinfo's result)
-  //freeaddrinfo(result);
 
   return retSocket ;
 
@@ -521,7 +432,7 @@ int senddata(int sockid, SOCKET sockfrom , char *buf , int buflen , SOCKET sockt
   printf("sockid:%d is in senddata()\n");
 #endif
   
-  iResult = send(sockfrom, buf, buflen, 0);
+  iResult = send(sockfrom, buf, strlen(buf), 0);
 #ifdef DEBUG
   printf("sockid:%d/senddata reutrn:%d\n",sockid, iResult);
 #endif
@@ -589,7 +500,7 @@ int recvdata(int sockid, SOCKET sockfrom , char *buf , int buflen , SOCKET sockt
    */
   int iResult;
 
-  iResult = recv(sockfrom, buf, buflen, 0);
+  iResult = recv(sockfrom, buf, sizeof(buf), 0);
   
   if (iResult == 0){
     /* 1: sockfrom からのコネクションがクローズしちゃった→セッション終了 */
@@ -635,7 +546,7 @@ int recvdata(int sockid, SOCKET sockfrom , char *buf , int buflen , SOCKET sockt
 
     /* iRresult >0 OR -1=no data */
 #ifdef DEBUG
-    printf("sockid:%d/recvdataa return:%d \'%s\'\n", sockid, iResult, convbuf(buf));
+    printf("sockid:%d/recvdata return:%d \'%s\'\n", sockid, iResult, convbuf(buf));
 #endif
     return iResult;
   }
